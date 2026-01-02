@@ -323,6 +323,9 @@ func (h *Hasher) finalize(out []byte) {
 
 // Sum256 returns the 32-byte BLAKE3 hash of data.
 func Sum256(data []byte) [OutLen]byte {
+	if out, ok := sum256Fast(data, iv, 0); ok {
+		return out
+	}
 	h := New()
 	_, _ = h.Write(data)
 	return h.Sum256()
@@ -337,7 +340,11 @@ func Sum(data []byte, out []byte) {
 
 // SumKeyed returns the 32-byte keyed BLAKE3 hash of data.
 func SumKeyed(key [KeyLen]byte, data []byte) [OutLen]byte {
-	h := NewKeyed(key)
+	keyWords := keyWordsFromBytes(&key)
+	if out, ok := sum256Fast(data, keyWords, keyedHash); ok {
+		return out
+	}
+	h := newHasher(keyWords, keyedHash)
 	_, _ = h.Write(data)
 	return h.Sum256()
 }

@@ -3,6 +3,14 @@
 package blake3
 
 var haveAVX2 = detectAVX2()
+var haveSSE41 = detectSSE41()
+
+func detectSSE41() bool {
+	_, _, c, _ := cpuid(1, 0)
+	const ssse3 = 1 << 9
+	const sse41 = 1 << 19
+	return c&ssse3 != 0 && c&sse41 != 0
+}
 
 func detectAVX2() bool {
 	_, _, c, _ := cpuid(1, 0)

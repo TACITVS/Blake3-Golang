@@ -34,7 +34,7 @@ func permute(m *[16]uint32) {
 	*m = permuted
 }
 
-func compress(
+func compressPortable(
 	cv *[8]uint32,
 	block *[16]uint32,
 	counter uint64,
