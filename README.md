@@ -2,10 +2,10 @@
 
 High-performance BLAKE3 implemented in idiomatic Go with optional amd64 Go
 assembly (SSE4.1/AVX2) for acceleration and a separate C/NASM benchmark harness
-aligned with FP_ASM_LIB calling conventions. This is not pure Go on amd64 by
-default: the fast path uses architecture-specific assembly, while other
-platforms (or `-tags purego`) use a portable Go fallback. This repo targets
-correctness first, then performance with hard data and repeatable benchmarks.
+aligned with FP_ASM_LIB calling conventions. This is not pure Go on amd64: the
+fast path relies on architecture-specific assembly, while other platforms use a
+portable Go fallback. This repo targets correctness first, then performance
+with hard data and repeatable benchmarks.
 
 Reference spec and upstream implementation:
 https://github.com/BLAKE3-team/BLAKE3
@@ -61,20 +61,6 @@ h := blake3.New()
 _, err := h.WriteReader(r, nil, totalBytes, onProgress)
 ```
 
-## Pure Go build (no assembly)
-Use the `purego` build tag to disable amd64 assembly and force the portable
-Go implementation even on x86-64:
-```powershell
-cd C:\Users\baian\GOLANG\Blake3-Golang
-go test -tags purego ./blake3
-```
-
-To benchmark the pure Go path:
-```powershell
-cd C:\Users\baian\GOLANG\Blake3-Golang
-go test -tags purego ./blake3 -run=^$ -bench=Benchmark -benchmem
-```
-
 ## Benchmarks
 Environment:
 - OS: Windows (goos=windows)
@@ -118,7 +104,7 @@ streaming Hasher.Write remains allocation-free.
   remains single-threaded for predictable incremental behavior.
 - The Go SIMD paths are Go assembly optimized for the Go ABI; no cgo is used,
   but the accelerated code is architecture-specific, with a portable Go
-  fallback on other platforms or with `-tags purego`.
+  fallback on other platforms.
 - The reference C implementation is more aggressively tuned (wider SIMD, tighter
   scheduling, and multiple dispatch paths). It remains the peak-performance
   baseline on this CPU.
