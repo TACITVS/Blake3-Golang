@@ -11,7 +11,9 @@ https://github.com/BLAKE3-team/BLAKE3
 ## Highlights
 - Go API that mirrors the standard hash.Hash patterns plus BLAKE3 XOF output.
 - Streaming support with progress callbacks for large inputs.
-- AVX2-accelerated chunk hashing on amd64 (Go assembly).
+- SSE4.1 row-based compression on amd64 for short inputs.
+- AVX2-accelerated chunk hashing and parent reduction on amd64 (Go assembly).
+- Parallel chunk hashing for large inputs in Sum256 on amd64.
 - C/NASM AVX2 8-way compressor for FP_ASM_LIB-style benchmarking.
 - Portable fallbacks for non-AVX2 systems.
 
@@ -64,29 +66,29 @@ Environment:
 - GCC: 15.1.0 (C:\msys64\mingw64\bin\gcc.exe)
 - NASM: C:\Users\baian\AppData\Local\bin\NASM\nasm.exe
 
-Go benchmarks (from `go test ./blake3 -run=^$ -bench=Benchmark -benchmem`):
-- Sum256 1K: 163.79 MB/s
-- Sum256 8K: 161.58 MB/s
-- Sum256 1M: 1191.29 MB/s
-- Hasher.Write 1M: 1190.06 MB/s
-- SHA256 1M: 383.92 MB/s
+Interleaved 10-run averages (from `tools/bench/compare.ps1`):
+- Go Sum256 1K: 516.53 MB/s
+- Go Sum256 8K: 1973.34 MB/s
+- Go Sum256 1M: 3110.43 MB/s
+- Ref C 1K: 654.94 MB/s
+- Ref C 8K: 2302.91 MB/s
+- Ref C 1M: 2337.30 MB/s
+- Mean across sizes: Go +5.76%
+- Weighted by bytes (1K/8K/1M): Go +32.70%
 
 C benchmark (FP_ASM_LIB-style NASM AVX2 8-way compressor, `tools/fp_bench/run.ps1`):
 - 1K: 197.17 MB/s
 - 8K: 282.82 MB/s
 - 1M: 1013.57 MB/s
 
-Reference C benchmark (upstream BLAKE3, `tools/ref_bench/run.ps1`):
-- 1K: 826.69 MB/s
-- 8K: 3044.57 MB/s
-- 1M: 3289.13 MB/s
-
-Note on Go `B/op` and `allocs/op`: the benchmarks allocate input buffers once
-and keep the hot loop allocation-free, so Go reports 0 B/op and 0 allocs/op.
+Note on Go `B/op` and `allocs/op`: Sum256 now uses small temporary buffers and
+goroutines for large inputs, so you may see small allocations there; streaming
+Hasher.Write remains allocation-free.
 
 ## Design notes and tradeoffs vs the reference implementation
-- Go implementation is single-threaded but uses AVX2 for chunk batching; this
-  keeps the API simple and deterministic while still gaining SIMD speedups.
+- Go implementation uses AVX2 for chunk batching and parent reduction, with
+  parallel chunk hashing for large inputs in Sum256; the streaming Hasher
+  remains single-threaded for predictable incremental behavior.
 - The Go AVX2 path is assembly generated and optimized for Go's ABI; it avoids
   cgo and keeps portability across platforms with portable fallbacks.
 - The reference C implementation is more aggressively tuned (wider SIMD, tighter
@@ -111,6 +113,12 @@ Go:
 ```powershell
 cd C:\Users\baian\GOLANG\Blake3-Golang
 go test ./blake3 -run=^$ -bench=Benchmark -benchmem
+```
+
+Interleaved 10-run Go vs reference:
+```powershell
+cd C:\Users\baian\GOLANG\Blake3-Golang
+tools\bench\compare.ps1
 ```
 
 FP_ASM_LIB C benchmark (NASM + GCC):
