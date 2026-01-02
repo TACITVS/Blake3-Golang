@@ -66,15 +66,25 @@ Environment:
 - GCC: 15.1.0 (C:\msys64\mingw64\bin\gcc.exe)
 - NASM: C:\Users\baian\AppData\Local\bin\NASM\nasm.exe
 
-Interleaved 10-run averages (from `tools/bench/compare.ps1`):
-- Go Sum256 1K: 516.53 MB/s
-- Go Sum256 8K: 1973.34 MB/s
-- Go Sum256 1M: 3110.43 MB/s
-- Ref C 1K: 654.94 MB/s
-- Ref C 8K: 2302.91 MB/s
-- Ref C 1M: 2337.30 MB/s
-- Mean across sizes: Go +5.76%
-- Weighted by bytes (1K/8K/1M): Go +32.70%
+Interleaved 10-run comparison (from `tools/bench/compare.ps1`, Go vs upstream
+reference C; each run alternates Go and ref C to reduce thermal bias):
+
+Go Sum256 (MB/s, avg/min/max/std):
+- 1K: 573.41 / 437.91 / 654.83 / 69.79
+- 8K: 2081.64 / 1300.10 / 2558.24 / 456.41
+- 1M: 3557.86 / 2174.63 / 4436.04 / 737.16
+
+Ref C (MB/s, avg/min/max/std):
+- 1K: 777.52 / 637.56 / 832.43 / 59.79
+- 8K: 2702.10 / 1873.27 / 3011.68 / 395.55
+- 1M: 2702.58 / 1307.83 / 3211.86 / 557.93
+
+Relative Go vs Ref:
+- 1K: -26.25%
+- 8K: -22.96%
+- 1M: +31.65%
+- Mean across sizes: +0.50%
+- Weighted by bytes (1K/8K/1M): +31.21%
 
 C benchmark (FP_ASM_LIB-style NASM AVX2 8-way compressor, `tools/fp_bench/run.ps1`):
 - 1K: 197.17 MB/s
