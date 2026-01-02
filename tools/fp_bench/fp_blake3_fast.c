@@ -6,7 +6,6 @@
 
 #ifdef __AVX2__
 #include <cpuid.h>
-#include <immintrin.h>
 #endif
 
 extern void fp_blake3_compress_words_asm(const uint32_t cv[8],
@@ -15,6 +14,12 @@ extern void fp_blake3_compress_words_asm(const uint32_t cv[8],
                                          uint32_t block_len,
                                          uint32_t flags,
                                          uint32_t out[16]);
+#ifdef __AVX2__
+extern void fp_blake3_compress4_asm(uint32_t cv[4][8],
+                                    const uint8_t *blocks[4],
+                                    const uint64_t counters[4],
+                                    uint32_t flags);
+#endif
 
 enum {
     CHUNK_START = 1 << 0,
@@ -263,104 +268,6 @@ static int have_avx2(void) {
     have_avx2_cached = (ebx & (1u << 5)) ? 1 : 0;
     return have_avx2_cached;
 }
-
-static inline void g_avx2(__m256i *va,
-                          __m256i *vb,
-                          __m256i *vc,
-                          __m256i *vd,
-                          __m256i mx,
-                          __m256i my) {
-    *va = _mm256_add_epi32(_mm256_add_epi32(*va, *vb), mx);
-    *vd = _mm256_xor_si256(*vd, *va);
-    *vd = _mm256_or_si256(_mm256_srli_epi32(*vd, 16),
-                          _mm256_slli_epi32(*vd, 16));
-    *vc = _mm256_add_epi32(*vc, *vd);
-    *vb = _mm256_xor_si256(*vb, *vc);
-    *vb = _mm256_or_si256(_mm256_srli_epi32(*vb, 12),
-                          _mm256_slli_epi32(*vb, 20));
-
-    *va = _mm256_add_epi32(_mm256_add_epi32(*va, *vb), my);
-    *vd = _mm256_xor_si256(*vd, *va);
-    *vd = _mm256_or_si256(_mm256_srli_epi32(*vd, 8),
-                          _mm256_slli_epi32(*vd, 24));
-    *vc = _mm256_add_epi32(*vc, *vd);
-    *vb = _mm256_xor_si256(*vb, *vc);
-    *vb = _mm256_or_si256(_mm256_srli_epi32(*vb, 7),
-                          _mm256_slli_epi32(*vb, 25));
-}
-
-static void compress_4way_ptrs(uint32_t cv[4][8],
-                               const uint8_t *blocks[4],
-                               const uint64_t counters[4],
-                               uint32_t flags) {
-    __m256i state[16];
-    __m256i msg[16];
-
-    for (int i = 0; i < 8; i++) {
-        state[i] = _mm256_set_epi32(
-            cv[3][i], cv[2][i], cv[1][i], cv[0][i],
-            cv[3][i], cv[2][i], cv[1][i], cv[0][i]);
-    }
-
-    state[8] = _mm256_set1_epi32(IV[0]);
-    state[9] = _mm256_set1_epi32(IV[1]);
-    state[10] = _mm256_set1_epi32(IV[2]);
-    state[11] = _mm256_set1_epi32(IV[3]);
-
-    state[12] = _mm256_set_epi32(
-        (uint32_t)counters[3], (uint32_t)counters[2],
-        (uint32_t)counters[1], (uint32_t)counters[0],
-        (uint32_t)counters[3], (uint32_t)counters[2],
-        (uint32_t)counters[1], (uint32_t)counters[0]);
-    state[13] = _mm256_set_epi32(
-        (uint32_t)(counters[3] >> 32), (uint32_t)(counters[2] >> 32),
-        (uint32_t)(counters[1] >> 32), (uint32_t)(counters[0] >> 32),
-        (uint32_t)(counters[3] >> 32), (uint32_t)(counters[2] >> 32),
-        (uint32_t)(counters[1] >> 32), (uint32_t)(counters[0] >> 32));
-    state[14] = _mm256_set1_epi32(FP_BLAKE3_BLOCK_LEN);
-    state[15] = _mm256_set1_epi32(flags);
-
-    for (int i = 0; i < 16; i++) {
-        msg[i] = _mm256_set_epi32(
-            load32_le(blocks[3] + (i * 4)),
-            load32_le(blocks[2] + (i * 4)),
-            load32_le(blocks[1] + (i * 4)),
-            load32_le(blocks[0] + (i * 4)),
-            load32_le(blocks[3] + (i * 4)),
-            load32_le(blocks[2] + (i * 4)),
-            load32_le(blocks[1] + (i * 4)),
-            load32_le(blocks[0] + (i * 4)));
-    }
-
-    for (int round = 0; round < 7; round++) {
-        __m256i m[16];
-        const uint8_t *schedule = MSG_SCHEDULE[round];
-        for (int i = 0; i < 16; i++) {
-            m[i] = msg[schedule[i]];
-        }
-
-        g_avx2(&state[0], &state[4], &state[8], &state[12], m[0], m[1]);
-        g_avx2(&state[1], &state[5], &state[9], &state[13], m[2], m[3]);
-        g_avx2(&state[2], &state[6], &state[10], &state[14], m[4], m[5]);
-        g_avx2(&state[3], &state[7], &state[11], &state[15], m[6], m[7]);
-
-        g_avx2(&state[0], &state[5], &state[10], &state[15], m[8], m[9]);
-        g_avx2(&state[1], &state[6], &state[11], &state[12], m[10], m[11]);
-        g_avx2(&state[2], &state[7], &state[8], &state[13], m[12], m[13]);
-        g_avx2(&state[3], &state[4], &state[9], &state[14], m[14], m[15]);
-    }
-
-    uint32_t out[4][16];
-    for (int i = 0; i < 16; i++) {
-        _mm256_storeu_si256((__m256i *)out[0] + (i / 4), state[i]);
-    }
-
-    for (int lane = 0; lane < 4; lane++) {
-        for (int i = 0; i < 8; i++) {
-            cv[lane][i] ^= out[lane][i + 8];
-        }
-    }
-}
 #endif
 
 static void chunk_cvs_scalar(const uint8_t *input,
@@ -385,7 +292,7 @@ static void chunk_cvs(const uint8_t *input,
                       uint32_t flags,
                       uint32_t out[][8]) {
 #ifdef __AVX2__
-    const size_t avx2_min_chunks = 16;
+    const size_t avx2_min_chunks = 4;
     if (chunks >= avx2_min_chunks && have_avx2()) {
         size_t i = 0;
         for (; i + 4 <= chunks; i += 4) {
@@ -421,7 +328,7 @@ static void chunk_cvs(const uint8_t *input,
                     input + ((i + 3) * FP_BLAKE3_CHUNK_LEN) +
                         (block * FP_BLAKE3_BLOCK_LEN),
                 };
-                compress_4way_ptrs(cv, blocks, counters, block_flags);
+                fp_blake3_compress4_asm(cv, blocks, counters, block_flags);
             }
 
             for (int lane = 0; lane < 4; lane++) {
