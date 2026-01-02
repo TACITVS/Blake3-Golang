@@ -1,9 +1,11 @@
 # Blake3-Golang
 
-High-performance BLAKE3 implemented in idiomatic Go with optional amd64 assembly
-(SSE4.1/AVX2) for acceleration and a separate C/NASM benchmark harness aligned
-with FP_ASM_LIB calling conventions. This repo targets correctness first, then
-performance with hard data and repeatable benchmarks.
+High-performance BLAKE3 implemented in idiomatic Go with optional amd64 Go
+assembly (SSE4.1/AVX2) for acceleration and a separate C/NASM benchmark harness
+aligned with FP_ASM_LIB calling conventions. This is not pure Go on amd64: the
+fast path relies on architecture-specific assembly, while other platforms use a
+portable Go fallback. This repo targets correctness first, then performance
+with hard data and repeatable benchmarks.
 
 Reference spec and upstream implementation:
 https://github.com/BLAKE3-team/BLAKE3
@@ -15,8 +17,8 @@ https://github.com/BLAKE3-team/BLAKE3
 - AVX2-accelerated chunk hashing and parent reduction on amd64 (Go assembly).
 - Parallel chunk hashing for large inputs in Sum256 on amd64.
 - C/NASM AVX2 8-way compressor for FP_ASM_LIB-style benchmarking.
-- Portable pure-Go fallback for non-amd64 or without SIMD; the fastest path is
-  amd64-only.
+- Portable Go fallback for non-amd64 or without SIMD; the fastest path is
+  amd64-only and uses Go assembly.
 
 ## Quick start (Go)
 ```go
@@ -101,7 +103,7 @@ streaming Hasher.Write remains allocation-free.
   parallel chunk hashing for large inputs in Sum256; the streaming Hasher
   remains single-threaded for predictable incremental behavior.
 - The Go SIMD paths are Go assembly optimized for the Go ABI; no cgo is used,
-  but the accelerated code is architecture-specific, with a portable pure-Go
+  but the accelerated code is architecture-specific, with a portable Go
   fallback on other platforms.
 - The reference C implementation is more aggressively tuned (wider SIMD, tighter
   scheduling, and multiple dispatch paths). It remains the peak-performance
