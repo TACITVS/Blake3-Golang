@@ -32,6 +32,18 @@ msg_schedule:
     db 9, 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7
     db 11, 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13
 
+rot16_shuf:
+    db 0x02, 0x03, 0x00, 0x01, 0x06, 0x07, 0x04, 0x05
+    db 0x0a, 0x0b, 0x08, 0x09, 0x0e, 0x0f, 0x0c, 0x0d
+    db 0x12, 0x13, 0x10, 0x11, 0x16, 0x17, 0x14, 0x15
+    db 0x1a, 0x1b, 0x18, 0x19, 0x1e, 0x1f, 0x1c, 0x1d
+
+rot8_shuf:
+    db 0x01, 0x02, 0x03, 0x00, 0x05, 0x06, 0x07, 0x04
+    db 0x09, 0x0a, 0x0b, 0x08, 0x0d, 0x0e, 0x0f, 0x0c
+    db 0x11, 0x12, 0x13, 0x10, 0x15, 0x16, 0x17, 0x14
+    db 0x19, 0x1a, 0x1b, 0x18, 0x1d, 0x1e, 0x1f, 0x1c
+
 section .text
 
 %macro G 6
@@ -445,4 +457,309 @@ fp_blake3_compress4_asm:
     vmovdqu ymm14, [rsp + SAVE_YMM14_OFFSET]
     vmovdqu ymm15, [rsp + SAVE_YMM15_OFFSET]
     add rsp, LOCAL_SIZE
+    EPILOGUE
+
+%define MSG8_OFFSET 0
+%define V15_SAVE_OFFSET 512
+%define SAVE8_YMM14_OFFSET 544
+%define SAVE8_YMM15_OFFSET 576
+%define LOCAL8_SIZE 608
+
+%macro TRANSPOSE8 0
+    vpunpckldq ymm8, ymm0, ymm1
+    vpunpckhdq ymm9, ymm0, ymm1
+    vpunpckldq ymm10, ymm2, ymm3
+    vpunpckhdq ymm11, ymm2, ymm3
+    vpunpckldq ymm12, ymm4, ymm5
+    vpunpckhdq ymm13, ymm4, ymm5
+    vpunpckldq ymm14, ymm6, ymm7
+    vpunpckhdq ymm15, ymm6, ymm7
+
+    vpunpcklqdq ymm0, ymm8, ymm10
+    vpunpckhqdq ymm1, ymm8, ymm10
+    vpunpcklqdq ymm2, ymm9, ymm11
+    vpunpckhqdq ymm3, ymm9, ymm11
+    vpunpcklqdq ymm4, ymm12, ymm14
+    vpunpckhqdq ymm5, ymm12, ymm14
+    vpunpcklqdq ymm6, ymm13, ymm15
+    vpunpckhqdq ymm7, ymm13, ymm15
+
+    vperm2i128 ymm8, ymm0, ymm4, 0x20
+    vperm2i128 ymm9, ymm1, ymm5, 0x20
+    vperm2i128 ymm10, ymm2, ymm6, 0x20
+    vperm2i128 ymm11, ymm3, ymm7, 0x20
+    vperm2i128 ymm12, ymm0, ymm4, 0x31
+    vperm2i128 ymm13, ymm1, ymm5, 0x31
+    vperm2i128 ymm14, ymm2, ymm6, 0x31
+    vperm2i128 ymm15, ymm3, ymm7, 0x31
+
+    vmovdqu ymm0, ymm8
+    vmovdqu ymm1, ymm9
+    vmovdqu ymm2, ymm10
+    vmovdqu ymm3, ymm11
+    vmovdqu ymm4, ymm12
+    vmovdqu ymm5, ymm13
+    vmovdqu ymm6, ymm14
+    vmovdqu ymm7, ymm15
+%endmacro
+
+%macro LOAD_MSG8 2
+    vmovdqu ymm0, [rax + %1]
+    vmovdqu ymm1, [rcx + %1]
+    vmovdqu ymm2, [rdx + %1]
+    vmovdqu ymm3, [r8 + %1]
+    vmovdqu ymm4, [r9 + %1]
+    vmovdqu ymm5, [r10 + %1]
+    vmovdqu ymm6, [r11 + %1]
+    vmovdqu ymm7, [r13 + %1]
+    TRANSPOSE8
+    vmovdqu [rbx + (%2 + 0) * 32], ymm0
+    vmovdqu [rbx + (%2 + 1) * 32], ymm1
+    vmovdqu [rbx + (%2 + 2) * 32], ymm2
+    vmovdqu [rbx + (%2 + 3) * 32], ymm3
+    vmovdqu [rbx + (%2 + 4) * 32], ymm4
+    vmovdqu [rbx + (%2 + 5) * 32], ymm5
+    vmovdqu [rbx + (%2 + 6) * 32], ymm6
+    vmovdqu [rbx + (%2 + 7) * 32], ymm7
+%endmacro
+
+%macro ROT16_4 4
+    vpshufb %1, %1, [rel rot16_shuf]
+    vpshufb %2, %2, [rel rot16_shuf]
+    vpshufb %3, %3, [rel rot16_shuf]
+    vpshufb %4, %4, [rel rot16_shuf]
+%endmacro
+
+%macro ROT8_4 4
+    vpshufb %1, %1, [rel rot8_shuf]
+    vpshufb %2, %2, [rel rot8_shuf]
+    vpshufb %3, %3, [rel rot8_shuf]
+    vpshufb %4, %4, [rel rot8_shuf]
+%endmacro
+
+%macro ROT12_4 0
+    vmovdqu [rsp + V15_SAVE_OFFSET], ymm15
+    vpsrld ymm15, ymm4, 12
+    vpslld ymm4, ymm4, 20
+    vpor ymm4, ymm4, ymm15
+    vpsrld ymm15, ymm5, 12
+    vpslld ymm5, ymm5, 20
+    vpor ymm5, ymm5, ymm15
+    vpsrld ymm15, ymm6, 12
+    vpslld ymm6, ymm6, 20
+    vpor ymm6, ymm6, ymm15
+    vpsrld ymm15, ymm7, 12
+    vpslld ymm7, ymm7, 20
+    vpor ymm7, ymm7, ymm15
+    vmovdqu ymm15, [rsp + V15_SAVE_OFFSET]
+%endmacro
+
+%macro ROT7_4 0
+    vmovdqu [rsp + V15_SAVE_OFFSET], ymm15
+    vpsrld ymm15, ymm4, 7
+    vpslld ymm4, ymm4, 25
+    vpor ymm4, ymm4, ymm15
+    vpsrld ymm15, ymm5, 7
+    vpslld ymm5, ymm5, 25
+    vpor ymm5, ymm5, ymm15
+    vpsrld ymm15, ymm6, 7
+    vpslld ymm6, ymm6, 25
+    vpor ymm6, ymm6, ymm15
+    vpsrld ymm15, ymm7, 7
+    vpslld ymm7, ymm7, 25
+    vpor ymm7, ymm7, ymm15
+    vmovdqu ymm15, [rsp + V15_SAVE_OFFSET]
+%endmacro
+
+%macro ROUND8 16
+    vpaddd ymm0, ymm0, [rbx + %1 * 32]
+    vpaddd ymm1, ymm1, [rbx + %2 * 32]
+    vpaddd ymm2, ymm2, [rbx + %3 * 32]
+    vpaddd ymm3, ymm3, [rbx + %4 * 32]
+    vpaddd ymm0, ymm0, ymm4
+    vpaddd ymm1, ymm1, ymm5
+    vpaddd ymm2, ymm2, ymm6
+    vpaddd ymm3, ymm3, ymm7
+    vpxor ymm12, ymm12, ymm0
+    vpxor ymm13, ymm13, ymm1
+    vpxor ymm14, ymm14, ymm2
+    vpxor ymm15, ymm15, ymm3
+    ROT16_4 ymm12, ymm13, ymm14, ymm15
+    vpaddd ymm8, ymm8, ymm12
+    vpaddd ymm9, ymm9, ymm13
+    vpaddd ymm10, ymm10, ymm14
+    vpaddd ymm11, ymm11, ymm15
+    vpxor ymm4, ymm4, ymm8
+    vpxor ymm5, ymm5, ymm9
+    vpxor ymm6, ymm6, ymm10
+    vpxor ymm7, ymm7, ymm11
+    ROT12_4
+
+    vpaddd ymm0, ymm0, [rbx + %5 * 32]
+    vpaddd ymm1, ymm1, [rbx + %6 * 32]
+    vpaddd ymm2, ymm2, [rbx + %7 * 32]
+    vpaddd ymm3, ymm3, [rbx + %8 * 32]
+    vpaddd ymm0, ymm0, ymm4
+    vpaddd ymm1, ymm1, ymm5
+    vpaddd ymm2, ymm2, ymm6
+    vpaddd ymm3, ymm3, ymm7
+    vpxor ymm12, ymm12, ymm0
+    vpxor ymm13, ymm13, ymm1
+    vpxor ymm14, ymm14, ymm2
+    vpxor ymm15, ymm15, ymm3
+    ROT8_4 ymm12, ymm13, ymm14, ymm15
+    vpaddd ymm8, ymm8, ymm12
+    vpaddd ymm9, ymm9, ymm13
+    vpaddd ymm10, ymm10, ymm14
+    vpaddd ymm11, ymm11, ymm15
+    vpxor ymm4, ymm4, ymm8
+    vpxor ymm5, ymm5, ymm9
+    vpxor ymm6, ymm6, ymm10
+    vpxor ymm7, ymm7, ymm11
+    ROT7_4
+
+    vpaddd ymm0, ymm0, [rbx + %9 * 32]
+    vpaddd ymm1, ymm1, [rbx + %10 * 32]
+    vpaddd ymm2, ymm2, [rbx + %11 * 32]
+    vpaddd ymm3, ymm3, [rbx + %12 * 32]
+    vpaddd ymm0, ymm0, ymm5
+    vpaddd ymm1, ymm1, ymm6
+    vpaddd ymm2, ymm2, ymm7
+    vpaddd ymm3, ymm3, ymm4
+    vpxor ymm15, ymm15, ymm0
+    vpxor ymm12, ymm12, ymm1
+    vpxor ymm13, ymm13, ymm2
+    vpxor ymm14, ymm14, ymm3
+    ROT16_4 ymm15, ymm12, ymm13, ymm14
+    vpaddd ymm10, ymm10, ymm15
+    vpaddd ymm11, ymm11, ymm12
+    vpaddd ymm8, ymm8, ymm13
+    vpaddd ymm9, ymm9, ymm14
+    vpxor ymm5, ymm5, ymm10
+    vpxor ymm6, ymm6, ymm11
+    vpxor ymm7, ymm7, ymm8
+    vpxor ymm4, ymm4, ymm9
+    ROT12_4
+
+    vpaddd ymm0, ymm0, [rbx + %13 * 32]
+    vpaddd ymm1, ymm1, [rbx + %14 * 32]
+    vpaddd ymm2, ymm2, [rbx + %15 * 32]
+    vpaddd ymm3, ymm3, [rbx + %16 * 32]
+    vpaddd ymm0, ymm0, ymm5
+    vpaddd ymm1, ymm1, ymm6
+    vpaddd ymm2, ymm2, ymm7
+    vpaddd ymm3, ymm3, ymm4
+    vpxor ymm15, ymm15, ymm0
+    vpxor ymm12, ymm12, ymm1
+    vpxor ymm13, ymm13, ymm2
+    vpxor ymm14, ymm14, ymm3
+    ROT8_4 ymm15, ymm12, ymm13, ymm14
+    vpaddd ymm10, ymm10, ymm15
+    vpaddd ymm11, ymm11, ymm12
+    vpaddd ymm8, ymm8, ymm13
+    vpaddd ymm9, ymm9, ymm14
+    vpxor ymm5, ymm5, ymm10
+    vpxor ymm6, ymm6, ymm11
+    vpxor ymm7, ymm7, ymm8
+    vpxor ymm4, ymm4, ymm9
+    ROT7_4
+%endmacro
+
+global fp_blake3_compress8_asm
+fp_blake3_compress8_asm:
+    PROLOGUE
+    sub rsp, LOCAL8_SIZE
+    vmovdqu [rsp + SAVE8_YMM14_OFFSET], ymm14
+    vmovdqu [rsp + SAVE8_YMM15_OFFSET], ymm15
+
+    lea rbx, [rsp + MSG8_OFFSET]
+    mov r12, rcx
+    mov r13, rdx
+    mov r14, r8
+    mov r15d, r9d
+
+    mov rax, [r13 + 0]
+    mov rcx, [r13 + 8]
+    mov rdx, [r13 + 16]
+    mov r8,  [r13 + 24]
+    mov r9,  [r13 + 32]
+    mov r10, [r13 + 40]
+    mov r11, [r13 + 48]
+    mov r13, [r13 + 56]
+
+    LOAD_MSG8 0, 0
+    LOAD_MSG8 32, 8
+
+    vmovdqu ymm0, [r12 + 0*32]
+    vmovdqu ymm1, [r12 + 1*32]
+    vmovdqu ymm2, [r12 + 2*32]
+    vmovdqu ymm3, [r12 + 3*32]
+    vmovdqu ymm4, [r12 + 4*32]
+    vmovdqu ymm5, [r12 + 5*32]
+    vmovdqu ymm6, [r12 + 6*32]
+    vmovdqu ymm7, [r12 + 7*32]
+    TRANSPOSE8
+
+    vpbroadcastd ymm8, dword [rel iv + 0]
+    vpbroadcastd ymm9, dword [rel iv + 4]
+    vpbroadcastd ymm10, dword [rel iv + 8]
+    vpbroadcastd ymm11, dword [rel iv + 12]
+
+    vmovd xmm12, dword [r14 + 0]
+    vpinsrd xmm12, dword [r14 + 8], 1
+    vpinsrd xmm12, dword [r14 + 16], 2
+    vpinsrd xmm12, dword [r14 + 24], 3
+    vmovd xmm13, dword [r14 + 32]
+    vpinsrd xmm13, dword [r14 + 40], 1
+    vpinsrd xmm13, dword [r14 + 48], 2
+    vpinsrd xmm13, dword [r14 + 56], 3
+    vinsertf128 ymm12, ymm12, xmm13, 1
+
+    vmovd xmm13, dword [r14 + 4]
+    vpinsrd xmm13, dword [r14 + 12], 1
+    vpinsrd xmm13, dword [r14 + 20], 2
+    vpinsrd xmm13, dword [r14 + 28], 3
+    vmovd xmm14, dword [r14 + 36]
+    vpinsrd xmm14, dword [r14 + 44], 1
+    vpinsrd xmm14, dword [r14 + 52], 2
+    vpinsrd xmm14, dword [r14 + 60], 3
+    vinsertf128 ymm13, ymm13, xmm14, 1
+
+    mov eax, BLOCK_LEN
+    vmovd xmm14, eax
+    vpbroadcastd ymm14, xmm14
+
+    vmovd xmm15, r15d
+    vpbroadcastd ymm15, xmm15
+
+    ROUND8 0, 2, 4, 6, 1, 3, 5, 7, 8, 10, 12, 14, 9, 11, 13, 15
+    ROUND8 2, 3, 7, 4, 6, 10, 0, 13, 1, 12, 9, 15, 11, 5, 14, 8
+    ROUND8 3, 10, 13, 7, 4, 12, 2, 14, 6, 9, 11, 8, 5, 0, 15, 1
+    ROUND8 10, 12, 14, 13, 7, 9, 3, 15, 4, 11, 5, 1, 0, 2, 8, 6
+    ROUND8 12, 9, 15, 14, 13, 11, 10, 8, 7, 5, 0, 6, 2, 3, 1, 4
+    ROUND8 9, 11, 8, 15, 14, 5, 12, 1, 13, 0, 2, 4, 3, 10, 6, 7
+    ROUND8 11, 5, 1, 8, 15, 0, 9, 6, 14, 2, 3, 7, 10, 12, 4, 13
+
+    vpxor ymm0, ymm0, ymm8
+    vpxor ymm1, ymm1, ymm9
+    vpxor ymm2, ymm2, ymm10
+    vpxor ymm3, ymm3, ymm11
+    vpxor ymm4, ymm4, ymm12
+    vpxor ymm5, ymm5, ymm13
+    vpxor ymm6, ymm6, ymm14
+    vpxor ymm7, ymm7, ymm15
+
+    TRANSPOSE8
+    vmovdqu [r12 + 0*32], ymm0
+    vmovdqu [r12 + 1*32], ymm1
+    vmovdqu [r12 + 2*32], ymm2
+    vmovdqu [r12 + 3*32], ymm3
+    vmovdqu [r12 + 4*32], ymm4
+    vmovdqu [r12 + 5*32], ymm5
+    vmovdqu [r12 + 6*32], ymm6
+    vmovdqu [r12 + 7*32], ymm7
+
+    vmovdqu ymm14, [rsp + SAVE8_YMM14_OFFSET]
+    vmovdqu ymm15, [rsp + SAVE8_YMM15_OFFSET]
+    add rsp, LOCAL8_SIZE
     EPILOGUE

@@ -19,6 +19,10 @@ extern void fp_blake3_compress4_asm(uint32_t cv[4][8],
                                     const uint8_t *blocks[4],
                                     const uint64_t counters[4],
                                     uint32_t flags);
+extern void fp_blake3_compress8_asm(uint32_t cv[8][8],
+                                    const uint8_t *blocks[8],
+                                    const uint64_t counters[8],
+                                    uint32_t flags);
 #endif
 
 enum {
@@ -64,10 +68,24 @@ static inline void store32_le(uint8_t *p, uint32_t v) {
     p[3] = (uint8_t)(v >> 24);
 }
 
-static void load_words(uint32_t out[16], const uint8_t block[64]) {
-    for (int i = 0; i < 16; i++) {
-        out[i] = load32_le(block + (i * 4));
+static void load_words_rec(uint32_t *out, const uint8_t *block, size_t count) {
+    if (count == 0) {
+        return;
     }
+    out[0] = load32_le(block);
+    load_words_rec(out + 1, block + 4, count - 1);
+}
+
+static void load_words(uint32_t out[16], const uint8_t block[64]) {
+    load_words_rec(out, block, 16);
+}
+
+static void copy_u32_rec(uint32_t *dst, const uint32_t *src, size_t count) {
+    if (count == 0) {
+        return;
+    }
+    dst[0] = src[0];
+    copy_u32_rec(dst + 1, src + 1, count - 1);
 }
 
 static void compress(const uint32_t cv[8],
@@ -86,9 +104,7 @@ static void compress_cv(uint32_t cv[8],
                         uint32_t flags) {
     uint32_t out[16];
     compress(cv, block_words, counter, block_len, flags, out);
-    for (int i = 0; i < 8; i++) {
-        cv[i] = out[i];
-    }
+    copy_u32_rec(cv, out, 8);
 }
 
 typedef struct {
@@ -99,40 +115,54 @@ typedef struct {
     uint32_t flags;
 } output;
 
-static void output_chaining_value(const output *o, uint32_t out_cv[8]) {
+static void output_chaining_value(const output *o, uint32_t out_cv[8]) {        
     uint32_t cv[8];
     memcpy(cv, o->input_cv, sizeof(cv));
-    compress_cv(cv, o->block_words, o->counter, o->block_len, o->flags);
+    compress_cv(cv, o->block_words, o->counter, o->block_len, o->flags);        
     memcpy(out_cv, cv, sizeof(cv));
 }
 
-static void output_root_bytes(const output *o, uint8_t *out, size_t out_len) {
-    uint64_t output_counter = 0;
-    while (out_len > 0) {
-        uint32_t out_words[16];
-        compress(o->input_cv,
-                 o->block_words,
-                 output_counter,
-                 o->block_len,
-                 o->flags | ROOT,
-                 out_words);
-        for (int i = 0; i < 16 && out_len > 0; i++) {
-            uint8_t tmp[4];
-            store32_le(tmp, out_words[i]);
-            size_t take = out_len < sizeof(tmp) ? out_len : sizeof(tmp);
-            memcpy(out, tmp, take);
-            out += take;
-            out_len -= take;
-        }
-        output_counter++;
+static void output_words_rec(const uint32_t out_words[16],
+                             uint8_t **out,
+                             size_t *out_len,
+                             size_t idx) {
+    if (idx == 16 || *out_len == 0) {
+        return;
     }
+    uint8_t tmp[4];
+    store32_le(tmp, out_words[idx]);
+    size_t take = *out_len < sizeof(tmp) ? *out_len : sizeof(tmp);
+    memcpy(*out, tmp, take);
+    *out += take;
+    *out_len -= take;
+    output_words_rec(out_words, out, out_len, idx + 1);
+}
+
+static void output_root_bytes_rec(const output *o,
+                                  uint8_t *out,
+                                  size_t out_len,
+                                  uint64_t output_counter) {
+    if (out_len == 0) {
+        return;
+    }
+    uint32_t out_words[16];
+    compress(o->input_cv,
+             o->block_words,
+             output_counter,
+             o->block_len,
+             o->flags | ROOT,
+             out_words);
+    output_words_rec(out_words, &out, &out_len, 0);
+    output_root_bytes_rec(o, out, out_len, output_counter + 1);
+}
+
+static void output_root_bytes(const output *o, uint8_t *out, size_t out_len) {
+    output_root_bytes_rec(o, out, out_len, 0);
 }
 
 static void key_words_from_bytes(const uint8_t key[FP_BLAKE3_KEY_LEN],
                                  uint32_t out[8]) {
-    for (int i = 0; i < 8; i++) {
-        out[i] = load32_le(key + (i * 4));
-    }
+    load_words_rec(out, key, 8);
 }
 
 static void chunk_state_init(FpBlake3Hasher *h,
@@ -155,32 +185,40 @@ static uint32_t chunk_state_start_flag(const FpBlake3Hasher *h) {
     return h->blocks_compressed == 0 ? CHUNK_START : 0;
 }
 
+static void chunk_state_update_rec(FpBlake3Hasher *h,
+                                   const uint8_t *input,
+                                   size_t len) {
+    if (len == 0) {
+        return;
+    }
+    if (h->block_len == FP_BLAKE3_BLOCK_LEN) {
+        uint32_t block_words[16];
+        load_words(block_words, h->block);
+        compress_cv(h->cv,
+                    block_words,
+                    h->chunk_counter,
+                    FP_BLAKE3_BLOCK_LEN,
+                    h->flags | chunk_state_start_flag(h));
+        h->blocks_compressed++;
+        h->block_len = 0;
+        memset(h->block, 0, sizeof(h->block));
+        chunk_state_update_rec(h, input, len);
+        return;
+    }
+
+    size_t want = FP_BLAKE3_BLOCK_LEN - h->block_len;
+    if (want > len) {
+        want = len;
+    }
+    memcpy(h->block + h->block_len, input, want);
+    h->block_len += (uint8_t)want;
+    chunk_state_update_rec(h, input + want, len - want);
+}
+
 static void chunk_state_update(FpBlake3Hasher *h,
                                const uint8_t *input,
                                size_t len) {
-    while (len > 0) {
-        if (h->block_len == FP_BLAKE3_BLOCK_LEN) {
-            uint32_t block_words[16];
-            load_words(block_words, h->block);
-            compress_cv(h->cv,
-                        block_words,
-                        h->chunk_counter,
-                        FP_BLAKE3_BLOCK_LEN,
-                        h->flags | chunk_state_start_flag(h));
-            h->blocks_compressed++;
-            h->block_len = 0;
-            memset(h->block, 0, sizeof(h->block));
-        }
-
-        size_t want = FP_BLAKE3_BLOCK_LEN - h->block_len;
-        if (want > len) {
-            want = len;
-        }
-        memcpy(h->block + h->block_len, input, want);
-        h->block_len += (uint8_t)want;
-        input += want;
-        len -= want;
-    }
+    chunk_state_update_rec(h, input, len);
 }
 
 static output chunk_state_output(const FpBlake3Hasher *h) {
@@ -195,20 +233,55 @@ static output chunk_state_output(const FpBlake3Hasher *h) {
     return out;
 }
 
+static void parent_words_rec(uint32_t dst[16],
+                             const uint32_t left[8],
+                             const uint32_t right[8],
+                             size_t idx) {
+    if (idx == 8) {
+        return;
+    }
+    dst[idx] = left[idx];
+    dst[8 + idx] = right[idx];
+    parent_words_rec(dst, left, right, idx + 1);
+}
+
 static output parent_output(const uint32_t left[8],
                             const uint32_t right[8],
                             const uint32_t key_words[8],
                             uint32_t flags) {
     output out;
     memcpy(out.input_cv, key_words, sizeof(out.input_cv));
-    for (int i = 0; i < 8; i++) {
-        out.block_words[i] = left[i];
-        out.block_words[8 + i] = right[i];
-    }
+    parent_words_rec(out.block_words, left, right, 0);
     out.counter = 0;
     out.block_len = FP_BLAKE3_BLOCK_LEN;
     out.flags = flags | PARENT;
     return out;
+}
+
+static void chunk_cv_full_rec(uint32_t state[8],
+                              const uint8_t *block_ptr,
+                              uint64_t chunk_counter,
+                              uint32_t base_flags,
+                              size_t block_idx) {
+    if (block_idx == (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN)) {
+        return;
+    }
+    uint32_t block_words[16];
+    uint32_t block_flags = base_flags;
+    if (block_idx == 0) {
+        block_flags |= CHUNK_START;
+    }
+    if (block_idx + 1 == (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN)) {
+        block_flags |= CHUNK_END;
+    }
+    load_words(block_words, block_ptr);
+    compress_cv(state, block_words, chunk_counter,
+                FP_BLAKE3_BLOCK_LEN, block_flags);
+    chunk_cv_full_rec(state,
+                      block_ptr + FP_BLAKE3_BLOCK_LEN,
+                      chunk_counter,
+                      base_flags,
+                      block_idx + 1);
 }
 
 static void chunk_cv_full(const uint8_t *input,
@@ -218,21 +291,7 @@ static void chunk_cv_full(const uint8_t *input,
                           uint32_t out_cv[8]) {
     uint32_t cv[8];
     memcpy(cv, key_words, sizeof(cv));
-
-    for (int block = 0; block < (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN);
-         block++) {
-        uint32_t block_words[16];
-        uint32_t block_flags = flags;
-        if (block == 0) {
-            block_flags |= CHUNK_START;
-        }
-        if (block == (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN) - 1) {
-            block_flags |= CHUNK_END;
-        }
-        load_words(block_words,
-                   input + (block * FP_BLAKE3_BLOCK_LEN));
-        compress_cv(cv, block_words, counter, FP_BLAKE3_BLOCK_LEN, block_flags);
-    }
+    chunk_cv_full_rec(cv, input, counter, flags, 0);
     memcpy(out_cv, cv, sizeof(cv));
 }
 
@@ -276,14 +335,143 @@ static void chunk_cvs_scalar(const uint8_t *input,
                              uint64_t counter,
                              uint32_t flags,
                              uint32_t out[][8]) {
-    for (size_t i = 0; i < chunks; i++) {
-        chunk_cv_full(input + (i * FP_BLAKE3_CHUNK_LEN),
-                      key_words,
-                      counter + i,
-                      flags,
-                      out[i]);
+    if (chunks == 0) {
+        return;
     }
+    chunk_cv_full(input, key_words, counter, flags, out[0]);
+    chunk_cvs_scalar(input + FP_BLAKE3_CHUNK_LEN,
+                     chunks - 1,
+                     key_words,
+                     counter + 1,
+                     flags,
+                     out + 1);
 }
+
+#ifdef __AVX2__
+static uint32_t block_flags_for_index(uint32_t flags, size_t block_idx) {
+    uint32_t block_flags = flags;
+    if (block_idx == 0) {
+        block_flags |= CHUNK_START;
+    }
+    if (block_idx + 1 == (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN)) {
+        block_flags |= CHUNK_END;
+    }
+    return block_flags;
+}
+
+static void fill_counters_rec(uint64_t *counters,
+                              size_t lanes,
+                              uint64_t counter) {
+    if (lanes == 0) {
+        return;
+    }
+    counters[0] = counter;
+    fill_counters_rec(counters + 1, lanes - 1, counter + 1);
+}
+
+static void init_cv_lanes_rec(uint32_t (*cv)[8],
+                              size_t lanes,
+                              const uint32_t key_words[8]) {
+    if (lanes == 0) {
+        return;
+    }
+    memcpy(cv[0], key_words, sizeof(cv[0]));
+    init_cv_lanes_rec(cv + 1, lanes - 1, key_words);
+}
+
+static void copy_cv_lanes_rec(uint32_t (*dst)[8],
+                              uint32_t (*src)[8],
+                              size_t lanes) {
+    if (lanes == 0) {
+        return;
+    }
+    memcpy(dst[0], src[0], sizeof(dst[0]));
+    copy_cv_lanes_rec(dst + 1, src + 1, lanes - 1);
+}
+
+static void chunk_cvs_blocks4_rec(uint32_t cv[4][8],
+                                  const uint8_t *input,
+                                  const uint64_t counters[4],
+                                  uint32_t flags,
+                                  size_t block_idx) {
+    if (block_idx == (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN)) {
+        return;
+    }
+    uint32_t block_flags = block_flags_for_index(flags, block_idx);
+    size_t block_offset = block_idx * FP_BLAKE3_BLOCK_LEN;
+    const uint8_t *blocks[4] = {
+        input + (0 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (1 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (2 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (3 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+    };
+    fp_blake3_compress4_asm(cv, blocks, counters, block_flags);
+    chunk_cvs_blocks4_rec(cv, input, counters, flags, block_idx + 1);
+}
+
+static void chunk_cvs_blocks8_rec(uint32_t cv[8][8],
+                                  const uint8_t *input,
+                                  const uint64_t counters[8],
+                                  uint32_t flags,
+                                  size_t block_idx) {
+    if (block_idx == (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN)) {
+        return;
+    }
+    uint32_t block_flags = block_flags_for_index(flags, block_idx);
+    size_t block_offset = block_idx * FP_BLAKE3_BLOCK_LEN;
+    const uint8_t *blocks[8] = {
+        input + (0 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (1 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (2 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (3 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (4 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (5 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (6 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+        input + (7 * FP_BLAKE3_CHUNK_LEN) + block_offset,
+    };
+    fp_blake3_compress8_asm(cv, blocks, counters, block_flags);
+    chunk_cvs_blocks8_rec(cv, input, counters, flags, block_idx + 1);
+}
+
+static void chunk_cvs_avx2_rec(const uint8_t *input,
+                               size_t chunks,
+                               const uint32_t key_words[8],
+                               uint64_t counter,
+                               uint32_t flags,
+                               uint32_t out[][8]) {
+    if (chunks >= 8) {
+        uint32_t cv[8][8];
+        uint64_t counters[8];
+        fill_counters_rec(counters, 8, counter);
+        init_cv_lanes_rec(cv, 8, key_words);
+        chunk_cvs_blocks8_rec(cv, input, counters, flags, 0);
+        copy_cv_lanes_rec(out, cv, 8);
+        chunk_cvs_avx2_rec(input + (8 * FP_BLAKE3_CHUNK_LEN),
+                           chunks - 8,
+                           key_words,
+                           counter + 8,
+                           flags,
+                           out + 8);
+        return;
+    }
+    if (chunks >= 4) {
+        uint32_t cv[4][8];
+        uint64_t counters[4];
+        fill_counters_rec(counters, 4, counter);
+        init_cv_lanes_rec(cv, 4, key_words);
+        chunk_cvs_blocks4_rec(cv, input, counters, flags, 0);
+        copy_cv_lanes_rec(out, cv, 4);
+        chunk_cvs_avx2_rec(input + (4 * FP_BLAKE3_CHUNK_LEN),
+                           chunks - 4,
+                           key_words,
+                           counter + 4,
+                           flags,
+                           out + 4);
+        return;
+    }
+    chunk_cvs_scalar(input, chunks, key_words, counter, flags, out);
+}
+#endif
 
 static void chunk_cvs(const uint8_t *input,
                       size_t chunks,
@@ -294,56 +482,7 @@ static void chunk_cvs(const uint8_t *input,
 #ifdef __AVX2__
     const size_t avx2_min_chunks = 4;
     if (chunks >= avx2_min_chunks && have_avx2()) {
-        size_t i = 0;
-        for (; i + 4 <= chunks; i += 4) {
-            uint32_t cv[4][8];
-            uint64_t counters[4] = {
-                counter + i,
-                counter + i + 1,
-                counter + i + 2,
-                counter + i + 3,
-            };
-            for (int lane = 0; lane < 4; lane++) {
-                memcpy(cv[lane], key_words, sizeof(cv[lane]));
-            }
-
-            for (int block = 0;
-                 block < (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN);
-                 block++) {
-                uint32_t block_flags = flags;
-                if (block == 0) {
-                    block_flags |= CHUNK_START;
-                }
-                if (block == (FP_BLAKE3_CHUNK_LEN / FP_BLAKE3_BLOCK_LEN) - 1) {
-                    block_flags |= CHUNK_END;
-                }
-
-                const uint8_t *blocks[4] = {
-                    input + ((i + 0) * FP_BLAKE3_CHUNK_LEN) +
-                        (block * FP_BLAKE3_BLOCK_LEN),
-                    input + ((i + 1) * FP_BLAKE3_CHUNK_LEN) +
-                        (block * FP_BLAKE3_BLOCK_LEN),
-                    input + ((i + 2) * FP_BLAKE3_CHUNK_LEN) +
-                        (block * FP_BLAKE3_BLOCK_LEN),
-                    input + ((i + 3) * FP_BLAKE3_CHUNK_LEN) +
-                        (block * FP_BLAKE3_BLOCK_LEN),
-                };
-                fp_blake3_compress4_asm(cv, blocks, counters, block_flags);
-            }
-
-            for (int lane = 0; lane < 4; lane++) {
-                memcpy(out[i + lane], cv[lane], sizeof(cv[lane]));
-            }
-        }
-
-        if (i < chunks) {
-            chunk_cvs_scalar(input + (i * FP_BLAKE3_CHUNK_LEN),
-                             chunks - i,
-                             key_words,
-                             counter + i,
-                             flags,
-                             out + i);
-        }
+        chunk_cvs_avx2_rec(input, chunks, key_words, counter, flags, out);
         return;
     }
 #endif
@@ -363,14 +502,89 @@ static void pop_stack(FpBlake3Hasher *h, uint32_t out[8]) {
 static void add_chunk_chaining_value(FpBlake3Hasher *h,
                                      uint32_t new_cv[8],
                                      uint64_t total_chunks) {
-    uint32_t left[8];
-    while ((total_chunks & 1) == 0) {
-        pop_stack(h, left);
-        output parent = parent_output(left, new_cv, h->key_words, h->flags);
-        output_chaining_value(&parent, new_cv);
-        total_chunks >>= 1;
+    if ((total_chunks & 1) != 0) {
+        push_stack(h, new_cv);
+        return;
     }
-    push_stack(h, new_cv);
+    uint32_t left[8];
+    pop_stack(h, left);
+    output parent = parent_output(left, new_cv, h->key_words, h->flags);
+    output_chaining_value(&parent, new_cv);
+    add_chunk_chaining_value(h, new_cv, total_chunks >> 1);
+}
+
+static uint64_t add_chunk_cv_batch_rec(FpBlake3Hasher *h,
+                                       uint32_t (*cv_batch)[8],
+                                       size_t batch,
+                                       uint64_t chunk_counter) {
+    if (batch == 0) {
+        return chunk_counter;
+    }
+    uint64_t total_chunks = chunk_counter + 1;
+    add_chunk_chaining_value(h, cv_batch[0], total_chunks);
+    return add_chunk_cv_batch_rec(h, cv_batch + 1, batch - 1, total_chunks);
+}
+
+static uint64_t process_full_chunks_rec(FpBlake3Hasher *h,
+                                        const uint8_t *input,
+                                        size_t full_chunks,
+                                        uint64_t chunk_counter) {
+    if (full_chunks == 0) {
+        return chunk_counter;
+    }
+    size_t batch = full_chunks > 8 ? 8 : full_chunks;
+    uint32_t cv_batch[8][8];
+    chunk_cvs(input, batch, h->key_words, chunk_counter, h->flags, cv_batch);
+    uint64_t next_counter =
+        add_chunk_cv_batch_rec(h, cv_batch, batch, chunk_counter);
+    return process_full_chunks_rec(h,
+                                   input + (batch * FP_BLAKE3_CHUNK_LEN),
+                                   full_chunks - batch,
+                                   next_counter);
+}
+
+static void fp_blake3_hasher_update_rec(FpBlake3Hasher *h,
+                                        const uint8_t *input,
+                                        size_t len) {
+    if (len == 0) {
+        return;
+    }
+    size_t state_len = chunk_state_len(h);
+    if (state_len == 0 && len >= FP_BLAKE3_CHUNK_LEN) {
+        size_t full_chunks = len / FP_BLAKE3_CHUNK_LEN;
+        if (len % FP_BLAKE3_CHUNK_LEN == 0 && full_chunks > 0) {
+            full_chunks--;
+        }
+        if (full_chunks > 0) {
+            uint64_t next_counter =
+                process_full_chunks_rec(h, input, full_chunks,
+                                        h->chunk_counter);
+            chunk_state_init(h, h->key_words, next_counter, h->flags);
+            size_t consumed = full_chunks * FP_BLAKE3_CHUNK_LEN;
+            fp_blake3_hasher_update_rec(h,
+                                        input + consumed,
+                                        len - consumed);
+            return;
+        }
+    }
+
+    if (state_len == FP_BLAKE3_CHUNK_LEN) {
+        output out = chunk_state_output(h);
+        uint32_t chunk_cv[8];
+        output_chaining_value(&out, chunk_cv);
+        uint64_t total_chunks = h->chunk_counter + 1;
+        add_chunk_chaining_value(h, chunk_cv, total_chunks);
+        chunk_state_init(h, h->key_words, total_chunks, h->flags);
+        fp_blake3_hasher_update_rec(h, input, len);
+        return;
+    }
+
+    size_t want = FP_BLAKE3_CHUNK_LEN - state_len;
+    if (want > len) {
+        want = len;
+    }
+    chunk_state_update(h, input, want);
+    fp_blake3_hasher_update_rec(h, input + want, len - want);
 }
 
 void fp_blake3_hasher_init(FpBlake3Hasher *hasher) {
@@ -409,70 +623,27 @@ void fp_blake3_hasher_init_derive_key(FpBlake3Hasher *hasher,
 void fp_blake3_hasher_update(FpBlake3Hasher *h,
                              const uint8_t *input,
                              size_t len) {
-    while (len > 0) {
-        if (chunk_state_len(h) == 0 && len >= FP_BLAKE3_CHUNK_LEN) {
-            size_t full_chunks = len / FP_BLAKE3_CHUNK_LEN;
-            if (len % FP_BLAKE3_CHUNK_LEN == 0) {
-                full_chunks--;
-            }
-            if (full_chunks > 0) {
-                uint64_t chunk_counter = h->chunk_counter;
-                while (full_chunks > 0) {
-                    size_t batch = full_chunks;
-                    if (batch > 8) {
-                        batch = 8;
-                    }
+    fp_blake3_hasher_update_rec(h, input, len);
+}
 
-                    uint32_t cv_batch[8][8];
-                    chunk_cvs(input,
-                              batch,
-                              h->key_words,
-                              chunk_counter,
-                              h->flags,
-                              cv_batch);
-                    for (size_t i = 0; i < batch; i++) {
-                        uint64_t total_chunks = chunk_counter + 1;
-                        add_chunk_chaining_value(h,
-                                                 cv_batch[i],
-                                                 total_chunks);
-                        chunk_counter = total_chunks;
-                    }
-
-                    input += batch * FP_BLAKE3_CHUNK_LEN;
-                    len -= batch * FP_BLAKE3_CHUNK_LEN;
-                    full_chunks -= batch;
-                }
-                chunk_state_init(h, h->key_words, chunk_counter, h->flags);
-                continue;
-            }
-        }
-
-        if (chunk_state_len(h) == FP_BLAKE3_CHUNK_LEN) {
-            output out = chunk_state_output(h);
-            uint32_t chunk_cv[8];
-            output_chaining_value(&out, chunk_cv);
-            uint64_t total_chunks = h->chunk_counter + 1;
-            add_chunk_chaining_value(h, chunk_cv, total_chunks);
-            chunk_state_init(h, h->key_words, total_chunks, h->flags);
-        }
-
-        size_t want = FP_BLAKE3_CHUNK_LEN - chunk_state_len(h);
-        if (want > len) {
-            want = len;
-        }
-        chunk_state_update(h, input, want);
-        input += want;
-        len -= want;
+static output reduce_stack_rec(const FpBlake3Hasher *h,
+                               output out,
+                               size_t idx) {
+    if (idx == 0) {
+        return out;
     }
+    uint32_t cv[8];
+    output_chaining_value(&out, cv);
+    output next = parent_output(h->cv_stack[idx - 1],
+                                cv,
+                                h->key_words,
+                                h->flags);
+    return reduce_stack_rec(h, next, idx - 1);
 }
 
 void fp_blake3_hasher_finalize(const FpBlake3Hasher *h, uint8_t *output_bytes) {
     output out = chunk_state_output(h);
-    for (int i = (int)h->cv_stack_len - 1; i >= 0; i--) {
-        uint32_t cv[8];
-        output_chaining_value(&out, cv);
-        out = parent_output(h->cv_stack[i], cv, h->key_words, h->flags);
-    }
+    out = reduce_stack_rec(h, out, h->cv_stack_len);
     output_root_bytes(&out, output_bytes, FP_BLAKE3_OUT_LEN);
 }
 
@@ -480,11 +651,7 @@ void fp_blake3_hasher_finalize_xof(const FpBlake3Hasher *h,
                                    uint8_t *output_bytes,
                                    size_t output_len) {
     output out = chunk_state_output(h);
-    for (int i = (int)h->cv_stack_len - 1; i >= 0; i--) {
-        uint32_t cv[8];
-        output_chaining_value(&out, cv);
-        out = parent_output(h->cv_stack[i], cv, h->key_words, h->flags);
-    }
+    out = reduce_stack_rec(h, out, h->cv_stack_len);
     output_root_bytes(&out, output_bytes, output_len);
 }
 

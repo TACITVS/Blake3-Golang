@@ -12,7 +12,7 @@ https://github.com/BLAKE3-team/BLAKE3
 - Go API that mirrors the standard hash.Hash patterns plus BLAKE3 XOF output.
 - Streaming support with progress callbacks for large inputs.
 - AVX2-accelerated chunk hashing on amd64 (Go assembly).
-- C/NASM AVX2 4-way compressor for FP_ASM_LIB-style benchmarking.
+- C/NASM AVX2 8-way compressor for FP_ASM_LIB-style benchmarking.
 - Portable fallbacks for non-AVX2 systems.
 
 ## Quick start (Go)
@@ -71,10 +71,10 @@ Go benchmarks (from `go test ./blake3 -run=^$ -bench=Benchmark -benchmem`):
 - Hasher.Write 1M: 1190.06 MB/s
 - SHA256 1M: 383.92 MB/s
 
-C benchmark (FP_ASM_LIB-style NASM AVX2 4-way compressor, `tools/fp_bench/run.ps1`):
-- 1K: 224.49 MB/s
-- 8K: 349.52 MB/s
-- 1M: 812.47 MB/s
+C benchmark (FP_ASM_LIB-style NASM AVX2 8-way compressor, `tools/fp_bench/run.ps1`):
+- 1K: 197.17 MB/s
+- 8K: 282.82 MB/s
+- 1M: 1013.57 MB/s
 
 Reference C benchmark (upstream BLAKE3, `tools/ref_bench/run.ps1`):
 - 1K: 826.69 MB/s
@@ -92,10 +92,10 @@ and keep the hot loop allocation-free, so Go reports 0 B/op and 0 allocs/op.
 - The reference C implementation is more aggressively tuned (wider SIMD, tighter
   scheduling, and multiple dispatch paths). It remains the peak-performance
   baseline on this CPU.
-- The FP_ASM_LIB NASM path is intentionally ABI-clean and uses the library's
+- The FP_ASM_LIB NASM path is intentionally ABI-clean and uses the library's    
   standard prologue/epilogue, favoring portability and integration over absolute
-  throughput. It currently uses 4-way SIMD and can be expanded to match the
-  reference layout later.
+  throughput. It now uses 8-way SIMD with a loop-free C harness; small inputs   
+  can pay a setup/transpose tax, while large inputs see higher throughput.      
 
 ## API overview
 - `Sum256(data []byte) [32]byte`
