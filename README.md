@@ -1,178 +1,165 @@
 # Blake3-Golang
 
-High-performance, pure-Go BLAKE3 with an AVX2 fast path and a streaming API.
-This repo is intentionally minimal: only the hashing implementation and the
-bench tooling needed to compare against the official reference implementation.
+High-performance BLAKE3 implemented in idiomatic Go with optional amd64 Go
+assembly (SSE4.1/AVX2) for acceleration and a separate C/NASM benchmark harness
+aligned with FP_ASM_LIB calling conventions. This is not pure Go on amd64: the
+fast path relies on architecture-specific assembly, while other platforms use a
+portable Go fallback. This repo targets correctness first, then performance
+with hard data and repeatable benchmarks.
 
-## Overview
+Reference spec and upstream implementation:
+https://github.com/BLAKE3-team/BLAKE3
 
-BLAKE3 is a modern, cryptographically secure hash function with an XOF (extendable
-output) design and a tree-based structure for parallelism. This implementation
-focuses on:
+## Highlights
+- Go API that mirrors the standard hash.Hash patterns plus BLAKE3 XOF output.
+- Streaming support with progress callbacks for large inputs.
+- SSE4.1 row-based compression on amd64 for short inputs.
+- AVX2-accelerated chunk hashing and parent reduction on amd64 (Go assembly).
+- Parallel chunk hashing for large inputs in Sum256 on amd64.
+- C/NASM AVX2 8-way compressor for FP_ASM_LIB-style benchmarking.
+- Portable Go fallback for non-amd64 or without SIMD; the fastest path is
+  amd64-only and uses Go assembly.
 
-- Fast portable Go code with zero external dependencies.
-- An AVX2 accelerated path on amd64 where available.
-- A streaming API that can report progress while hashing large inputs.
-- Compatibility with the official test vectors.
-
-## Features
-
-- Standard, keyed, and derive-key modes.
-- Extendable-output API (write any number of output bytes).
-- Implements `hash.Hash`.
-- Zero allocations in hot paths (unless you ask it to allocate a buffer).
-- AVX2 batch compression on amd64, with safe fallbacks elsewhere.
-
-## Usage
-
+## Quick start (Go)
 ```go
 package main
 
 import (
-	"fmt"
-	"github.com/TACITVS/Blake3-Golang/blake3"
+    "fmt"
+    "github.com/TACITVS/Blake3-Golang/blake3"
 )
 
 func main() {
-	sum := blake3.Sum256([]byte("hello"))
-	fmt.Printf("%x\n", sum)
+    sum := blake3.Sum256([]byte("hello"))
+    fmt.Printf("%x\n", sum)
 }
 ```
 
-### Streaming and progress
+## Streaming with progress
+```go
+package main
 
+import (
+    "fmt"
+    "github.com/TACITVS/Blake3-Golang/blake3"
+)
+
+func main() {
+    sum, err := blake3.HashFile("big.bin", 256*1024, func(p blake3.Progress) {
+        fmt.Printf("processed=%d total=%d elapsed=%s\n", p.Processed, p.Total, p.Elapsed)
+    })
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("%x\n", sum)
+}
+```
+
+For streaming a reader directly, use:
 ```go
 h := blake3.New()
-buf := make([]byte, 256*1024)
-_, err := h.WriteReader(reader, buf, totalBytes, func(p blake3.Progress) {
-	// Snapshot current digest if needed (does not mutate the hasher).
-	_ = h.Sum256()
-})
-if err != nil {
-	// handle error
-}
-digest := h.Sum256()
+_, err := h.WriteReader(r, nil, totalBytes, onProgress)
 ```
-
-Notes:
-- If `totalBytes` is unknown, pass `0`.
-- Progress callback is called on each successful read.
-- If you pass a zero-length buffer, a default size (256 KiB) is allocated.
-
-## Implementation approach
-
-This implementation tracks the official BLAKE3 spec, but is optimized for Go:
-
-- **Chunk batching:** For full 1024-byte chunks, hashing can proceed in batches
-  to amortize overhead. The batch size is 8 chunks.
-- **AVX2 vectorization:** On amd64 with AVX2, we process 8 chunks in parallel
-  via `hashFAVX2` (Go assembly). This is gated by CPU feature detection and
-  only used when there are at least 16 full chunks available to avoid
-  small-input overhead.
-- **Zero-allocation hot path:** The core hashing code avoids heap allocations.
-  Benchmarks show `0 B/op` and `0 allocs/op` for fixed-size inputs.
-- **No cgo:** Everything builds with the Go toolchain for easy portability.
-
-### How this differs from the official reference implementation
-
-The official reference implementation (https://github.com/BLAKE3-team/BLAKE3)
-is a multi-language codebase with multiple SIMD backends and a richer API
-surface. Key differences:
-
-- **Backend breadth:** The reference includes SSE2/SSE4.1/AVX2/AVX-512/NEON
-  backends. This Go implementation currently uses portable Go plus AVX2
-  only. That means the reference can be faster on many CPUs, especially
-  on x86 with SSE4.1 or on ARM with NEON.
-- **Language/runtime:** The reference is in C (and Rust) with hand-tuned
-  assembly. This project stays in Go (plus a small AVX2 assembly file) to
-  keep portability and a Go-idiomatic API.
-- **Parallelism:** The reference can expose threaded parallel hashing.
-  This Go implementation is single-threaded; it only uses SIMD within
-  a single thread.
-- **API focus:** This repo adds a Go-friendly streaming/progress API
-  and conforms to `hash.Hash` for easy integration.
-
-In short, the reference is the speed ceiling and feature superset; this repo
-targets a fast, idiomatic Go implementation with a minimal surface area.
-
-## AVX2 support
-
-AVX2 is enabled on amd64 when:
-- The CPU supports AVX2.
-- The OS has AVX enabled (OSXSAVE + XCR0 checks).
-
-If those checks fail, or the input is too small for the threshold, the
-implementation falls back to the portable Go path. The AVX2 code path
-processes 8 chunks at a time.
 
 ## Benchmarks
+Environment:
+- OS: Windows (goos=windows)
+- CPU: Intel(R) Core(TM) i7-4600M CPU @ 2.90GHz
+- Go: amd64 (goarch=amd64)
+- GCC: 15.1.0 (C:\msys64\mingw64\bin\gcc.exe)
+- NASM: C:\Users\baian\AppData\Local\bin\NASM\nasm.exe
 
-All benchmarks below were run on Windows/amd64 with Go 1.24.7 and AVX2 enabled.
-Your results will vary by CPU, memory, and compiler flags. The commands used
-are provided so you can reproduce on your hardware.
+Interleaved 10-run comparison (from `tools/bench/compare.ps1`, Go vs upstream
+reference C; each run alternates Go and ref C to reduce thermal bias):
 
-### Go benchmarks
+Go Sum256 (MB/s, avg/min/max/std):
+- 1K: 573.41 / 437.91 / 654.83 / 69.79
+- 8K: 2081.64 / 1300.10 / 2558.24 / 456.41
+- 1M: 3557.86 / 2174.63 / 4436.04 / 737.16
 
-Run:
+Ref C (MB/s, avg/min/max/std):
+- 1K: 777.52 / 637.56 / 832.43 / 59.79
+- 8K: 2702.10 / 1873.27 / 3011.68 / 395.55
+- 1M: 2702.58 / 1307.83 / 3211.86 / 557.93
+
+Relative Go vs Ref:
+- 1K: -26.25%
+- 8K: -22.96%
+- 1M: +31.65%
+- Mean across sizes: +0.50%
+- Weighted by bytes (1K/8K/1M): +31.21%
+
+C benchmark (FP_ASM_LIB-style NASM AVX2 8-way compressor, `tools/fp_bench/run.ps1`):
+- 1K: 197.17 MB/s
+- 8K: 282.82 MB/s
+- 1M: 1013.57 MB/s
+
+Note on Go `B/op` and `allocs/op`: Sum256 uses small temporary buffers and
+spawns goroutines for large inputs, so you may see small allocations there;
+streaming Hasher.Write remains allocation-free.
+
+## Design notes and tradeoffs vs the reference implementation
+- Go implementation uses AVX2 for chunk batching and parent reduction, with
+  parallel chunk hashing for large inputs in Sum256; the streaming Hasher
+  remains single-threaded for predictable incremental behavior.
+- The Go SIMD paths are Go assembly optimized for the Go ABI; no cgo is used,
+  but the accelerated code is architecture-specific, with a portable Go
+  fallback on other platforms.
+- The reference C implementation is more aggressively tuned (wider SIMD, tighter
+  scheduling, and multiple dispatch paths). It remains the peak-performance
+  baseline on this CPU.
+- The FP_ASM_LIB NASM path is intentionally ABI-clean and uses the library's
+  standard prologue/epilogue, favoring portability and integration over absolute
+  throughput. It uses 8-way SIMD with a loop-free C harness; small inputs can
+  pay a setup/transpose tax, while large inputs see higher throughput.
+
+## API overview
+- `Sum256(data []byte) [32]byte`
+- `Sum(data []byte, out []byte)` (XOF)
+- `SumKeyed(key [32]byte, data []byte) [32]byte`
+- `DeriveKey(context string, out []byte)`
+- `New()` / `NewKeyed(key)` / `NewDeriveKey(context)`
+- `Hasher.Write`, `Hasher.Sum`, `Hasher.Sum256`, `Hasher.Finalize`
+- Streaming helpers in `blake3/stream.go` for progress reporting
+
+## Running benchmarks locally
+Go:
 ```powershell
-go test ./blake3 -bench . -benchmem
+cd C:\Users\baian\GOLANG\Blake3-Golang
+go test ./blake3 -run=^$ -bench=Benchmark -benchmem
 ```
 
-Observed results:
-
-| Benchmark | Size | Time/op | Throughput | B/op | allocs/op |
-| --- | --- | --- | --- | --- | --- |
-| BenchmarkSum256_1K | 1 KiB | ~10.4 us | ~98.6 MB/s | 0 | 0 |
-| BenchmarkSum256_8K | 8 KiB | ~78.8 us | ~103.9 MB/s | 0 | 0 |
-| BenchmarkSum256_1M | 1 MiB | ~1.28 ms | ~819 MB/s | 0 | 0 |
-| BenchmarkSum256_1M_4KAligned | 1 MiB | ~1.25 ms | ~838 MB/s | 0 | 0 |
-| BenchmarkHasherWrite_1K | 1 KiB | ~9.76 us | ~104.9 MB/s | 0 | 0 |
-| BenchmarkHasherWrite_8K | 8 KiB | ~75.3 us | ~108.8 MB/s | 0 | 0 |
-| BenchmarkHasherWrite_1M | 1 MiB | ~1.37 ms | ~763 MB/s | 0 | 0 |
-| BenchmarkHasherWrite_1M_4KAligned | 1 MiB | ~1.32 ms | ~792 MB/s | 0 | 0 |
-
-Why `B/op` and `allocs/op` are zero:
-- The benchmarks allocate the input buffers once, outside the timing loop.
-- The hashing code uses stack arrays and avoids heap allocations.
-- The streaming API only allocates if you pass a zero-length buffer.
-
-### Reference C benchmarks
-
-This repo includes a small C benchmark harness that targets the official BLAKE3
-reference implementation. You need to clone the reference repo locally (no Rust
-required).
-
-Setup:
+Interleaved 10-run Go vs reference:
 ```powershell
-git clone https://github.com/BLAKE3-team/BLAKE3 _ref/BLAKE3
+cd C:\Users\baian\GOLANG\Blake3-Golang
+tools\bench\compare.ps1
 ```
 
-Run (expects GCC in `C:\msys64\mingw64\bin\gcc.exe`):
+FP_ASM_LIB C benchmark (NASM + GCC):
 ```powershell
-./tools/ref_bench/run.ps1
+cd C:\Users\baian\GOLANG\Blake3-Golang
+tools\fp_bench\run.ps1
 ```
 
-Observed results (same machine):
-
-| Size | Throughput |
-| --- | --- |
-| 1 KiB | ~661 MB/s |
-| 8 KiB | ~2397 MB/s |
-| 1 MiB | ~2550 MB/s |
-
-This gap is expected: the reference uses multiple SIMD backends and more
-aggressive low-level tuning. The Go implementation trades some peak speed for
-portability and a Go-native API.
-
-## Testing
-
+Reference C benchmark (upstream BLAKE3):
 ```powershell
-go test ./blake3
+cd C:\Users\baian\GOLANG\Blake3-Golang
+tools\ref_bench\run.ps1
 ```
 
-The test vectors in `blake3/testdata/test_vectors.json` come from the official
-reference to validate correctness.
+The reference benchmark expects upstream sources at:
+`C:\Users\baian\GOLANG\_ref\BLAKE3\c`
+
+## Project layout
+- `blake3/`: Go implementation (portable core + amd64 assembly for SSE4.1/AVX2).
+- `tools/fp_bench/`: C/NASM bench harness using FP_ASM_LIB-style AVX2.
+- `tools/ref_bench/`: benchmark harness for upstream reference C.
+- `tools/bench/`: interleaved Go vs reference benchmark script.
+
+## Status
+Correctness tests pass for the Go and C paths. Performance is measured and
+tracked; short-input throughput still trails the reference baseline on this CPU
+while large inputs exceed it.
 
 ## License
-
 MIT. See `LICENSE`.
