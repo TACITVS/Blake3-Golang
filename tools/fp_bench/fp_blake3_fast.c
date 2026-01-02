@@ -9,6 +9,13 @@
 #include <immintrin.h>
 #endif
 
+extern void fp_blake3_compress_words_asm(const uint32_t cv[8],
+                                         const uint32_t block_words[16],
+                                         uint64_t counter,
+                                         uint32_t block_len,
+                                         uint32_t flags,
+                                         uint32_t out[16]);
+
 enum {
     CHUNK_START = 1 << 0,
     CHUNK_END = 1 << 1,
@@ -64,116 +71,7 @@ static void compress(const uint32_t cv[8],
                      uint32_t block_len,
                      uint32_t flags,
                      uint32_t out[16]) {
-    uint32_t state[16];
-
-    for (int i = 0; i < 8; i++) {
-        state[i] = cv[i];
-    }
-    state[8] = IV[0];
-    state[9] = IV[1];
-    state[10] = IV[2];
-    state[11] = IV[3];
-    state[12] = (uint32_t)counter;
-    state[13] = (uint32_t)(counter >> 32);
-    state[14] = block_len;
-    state[15] = flags;
-
-    for (int round = 0; round < 7; round++) {
-        uint32_t msg[16];
-        const uint8_t *schedule = MSG_SCHEDULE[round];
-        for (int i = 0; i < 16; i++) {
-            msg[i] = block_words[schedule[i]];
-        }
-
-        state[0] += state[4] + msg[0];
-        state[12] = rotr32(state[12] ^ state[0], 16);
-        state[8] += state[12];
-        state[4] = rotr32(state[4] ^ state[8], 12);
-
-        state[1] += state[5] + msg[2];
-        state[13] = rotr32(state[13] ^ state[1], 16);
-        state[9] += state[13];
-        state[5] = rotr32(state[5] ^ state[9], 12);
-
-        state[2] += state[6] + msg[4];
-        state[14] = rotr32(state[14] ^ state[2], 16);
-        state[10] += state[14];
-        state[6] = rotr32(state[6] ^ state[10], 12);
-
-        state[3] += state[7] + msg[6];
-        state[15] = rotr32(state[15] ^ state[3], 16);
-        state[11] += state[15];
-        state[7] = rotr32(state[7] ^ state[11], 12);
-
-        state[0] += state[4] + msg[1];
-        state[12] = rotr32(state[12] ^ state[0], 8);
-        state[8] += state[12];
-        state[4] = rotr32(state[4] ^ state[8], 7);
-
-        state[1] += state[5] + msg[3];
-        state[13] = rotr32(state[13] ^ state[1], 8);
-        state[9] += state[13];
-        state[5] = rotr32(state[5] ^ state[9], 7);
-
-        state[2] += state[6] + msg[5];
-        state[14] = rotr32(state[14] ^ state[2], 8);
-        state[10] += state[14];
-        state[6] = rotr32(state[6] ^ state[10], 7);
-
-        state[3] += state[7] + msg[7];
-        state[15] = rotr32(state[15] ^ state[3], 8);
-        state[11] += state[15];
-        state[7] = rotr32(state[7] ^ state[11], 7);
-
-        state[0] += state[5] + msg[8];
-        state[15] = rotr32(state[15] ^ state[0], 16);
-        state[10] += state[15];
-        state[5] = rotr32(state[5] ^ state[10], 12);
-
-        state[1] += state[6] + msg[10];
-        state[12] = rotr32(state[12] ^ state[1], 16);
-        state[11] += state[12];
-        state[6] = rotr32(state[6] ^ state[11], 12);
-
-        state[2] += state[7] + msg[12];
-        state[13] = rotr32(state[13] ^ state[2], 16);
-        state[8] += state[13];
-        state[7] = rotr32(state[7] ^ state[8], 12);
-
-        state[3] += state[4] + msg[14];
-        state[14] = rotr32(state[14] ^ state[3], 16);
-        state[9] += state[14];
-        state[4] = rotr32(state[4] ^ state[9], 12);
-
-        state[0] += state[5] + msg[9];
-        state[15] = rotr32(state[15] ^ state[0], 8);
-        state[10] += state[15];
-        state[5] = rotr32(state[5] ^ state[10], 7);
-
-        state[1] += state[6] + msg[11];
-        state[12] = rotr32(state[12] ^ state[1], 8);
-        state[11] += state[12];
-        state[6] = rotr32(state[6] ^ state[11], 7);
-
-        state[2] += state[7] + msg[13];
-        state[13] = rotr32(state[13] ^ state[2], 8);
-        state[8] += state[13];
-        state[7] = rotr32(state[7] ^ state[8], 7);
-
-        state[3] += state[4] + msg[15];
-        state[14] = rotr32(state[14] ^ state[3], 8);
-        state[9] += state[14];
-        state[4] = rotr32(state[4] ^ state[9], 7);
-    }
-
-    for (int i = 0; i < 8; i++) {
-        state[i] ^= state[i + 8];
-        state[i + 8] ^= cv[i];
-    }
-
-    for (int i = 0; i < 16; i++) {
-        out[i] = state[i];
-    }
+    fp_blake3_compress_words_asm(cv, block_words, counter, block_len, flags, out);
 }
 
 static void compress_cv(uint32_t cv[8],

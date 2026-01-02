@@ -45,10 +45,26 @@ static void self_test(void) {
         0x9b, 0xcb, 0x25, 0xc9, 0xad, 0xc1, 0x12, 0xb7,
         0xcc, 0x9a, 0x93, 0xca, 0xe4, 0x1f, 0x32, 0x62,
     };
+    static const uint8_t expected3[FP_BLAKE3_OUT_LEN] = {
+        0xe1, 0xbe, 0x4d, 0x7a, 0x8a, 0xb5, 0x56, 0x0a,
+        0xa4, 0x19, 0x9e, 0xea, 0x33, 0x98, 0x49, 0xba,
+        0x8e, 0x29, 0x3d, 0x55, 0xca, 0x0a, 0x81, 0x00,
+        0x67, 0x26, 0xd1, 0x84, 0x51, 0x9e, 0x64, 0x7f,
+    };
     uint8_t out[FP_BLAKE3_OUT_LEN];
+    uint8_t in3[3] = {0, 1, 2};
+
     fp_blake3_hash(NULL, 0, out);
     if (memcmp(out, expected, sizeof(expected)) != 0) {
         fprintf(stderr, "self-test failed for empty input\n");
+        fprintf(stderr, "got: ");
+        print_hex(out, sizeof(out));
+        exit(1);
+    }
+
+    fp_blake3_hash(in3, sizeof(in3), out);
+    if (memcmp(out, expected3, sizeof(expected3)) != 0) {
+        fprintf(stderr, "self-test failed for input_len=3\n");
         fprintf(stderr, "got: ");
         print_hex(out, sizeof(out));
         exit(1);

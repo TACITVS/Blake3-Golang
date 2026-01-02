@@ -1,6 +1,7 @@
 bin/
 pkg/
 *.exe
+*.obj
 *.dll
 *.so
 *.dylib
