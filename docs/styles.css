@@ -169,6 +169,10 @@ section h2 {
   flex-wrap: wrap;
 }
 
+.legend + .tabs {
+  margin-left: auto;
+}
+
 .legend-item {
   display: inline-flex;
   align-items: center;
@@ -242,6 +246,20 @@ canvas {
 #stats-table th {
   background: #fbf7f1;
   font-weight: 600;
+}
+
+.table-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.row-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
 }
 
 .footer {

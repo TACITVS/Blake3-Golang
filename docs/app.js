@@ -100,8 +100,8 @@
     });
   }
 
-  function renderLegend(versions) {
-    const legend = el('legend');
+  function renderLegendFor(id, versions) {
+    const legend = el(id);
     if (!legend) return;
     legend.innerHTML = '';
     versions.forEach((v) => {
@@ -116,6 +116,30 @@
       item.appendChild(label);
       legend.appendChild(item);
     });
+  }
+
+  function renderLegends(versions) {
+    renderLegendFor('legend', versions);
+    renderLegendFor('legend-run', versions);
+  }
+
+  function hexToRgba(hex, alpha) {
+    if (!hex || hex[0] !== '#' || (hex.length !== 7 && hex.length !== 4)) {
+      return `rgba(0,0,0,${alpha})`;
+    }
+    let r;
+    let g;
+    let b;
+    if (hex.length === 4) {
+      r = parseInt(hex[1] + hex[1], 16);
+      g = parseInt(hex[2] + hex[2], 16);
+      b = parseInt(hex[3] + hex[3], 16);
+    } else {
+      r = parseInt(hex.slice(1, 3), 16);
+      g = parseInt(hex.slice(3, 5), 16);
+      b = parseInt(hex.slice(5, 7), 16);
+    }
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
   function svgEl(name, attrs = {}) {
@@ -174,6 +198,15 @@
           fill: palette[v.label] || '#999'
         });
         svg.appendChild(rect);
+        const label = svgEl('text', {
+          x: x + (barW - 4) / 2,
+          y: Math.max(pad.top + 12, y - 6),
+          'text-anchor': 'middle',
+          'font-size': '11',
+          fill: '#3a3a3a'
+        });
+        label.textContent = avg.toFixed(0);
+        svg.appendChild(label);
       });
       const label = svgEl('text', { x: pad.left + gi * groupW + groupW / 2, y: pad.top + chartH + 30, 'text-anchor': 'middle', 'font-size': '13', fill: '#3a3a3a' });
       label.textContent = size;
@@ -204,17 +237,26 @@
       sizes.forEach((s) => {
         const stats = computeStats(v.sizes[s] || []);
         const row = document.createElement('tr');
-        const values = [
-          v.label,
-          s,
-          stats.avg.toFixed(2),
-          stats.min.toFixed(2),
-          stats.max.toFixed(2),
-          stats.std.toFixed(2)
-        ];
-        values.forEach((val) => {
+        const color = palette[v.label] || '#999';
+        row.style.borderLeft = `4px solid ${color}`;
+        row.style.background = `linear-gradient(90deg, ${hexToRgba(color, 0.12)}, transparent 70%)`;
+
+        const versionCell = document.createElement('td');
+        const swatch = document.createElement('span');
+        swatch.className = 'row-swatch';
+        swatch.style.background = color;
+        const label = document.createElement('span');
+        label.textContent = v.label;
+        const wrap = document.createElement('span');
+        wrap.className = 'table-version';
+        wrap.appendChild(swatch);
+        wrap.appendChild(label);
+        versionCell.appendChild(wrap);
+        row.appendChild(versionCell);
+
+        [s, stats.avg, stats.min, stats.max, stats.std].forEach((val) => {
           const td = document.createElement('td');
-          td.textContent = val;
+          td.textContent = typeof val === 'number' ? val.toFixed(2) : val;
           row.appendChild(td);
         });
         tbody.appendChild(row);
@@ -353,7 +395,7 @@
     renderSpecs(data);
     renderMeta(data);
     renderSummary(data);
-    renderLegend(getVersions(data));
+    renderLegends(getVersions(data));
     renderBarChart(data);
     renderTable(data);
     setupTabs(data);
