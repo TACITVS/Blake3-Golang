@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blake3-Golang Benchmarks</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero-inner">
+        <div class="eyebrow">Blake3-Golang - Benchmarks</div>
+        <h1>Real-world throughput, <span>all versions</span>.</h1>
+        <p class="subtitle">
+          This page compares the Go SIMD build, Go pure-Go build, the official
+          reference C implementation, and the FP_ASM_LIB-style C benchmark.
+          Data is collected from local runs on the machine listed below.
+        </p>
+        <div class="meta-line" id="meta-line"></div>
+        <div class="actions">
+          <a href="https://github.com/TACITVS/Blake3-Golang">Repo</a>
+          <a href="data/bench.json">Raw JSON</a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <h2>Machine Specs</h2>
+        <div class="specs-grid" id="specs-grid"></div>
+      </section>
+
+      <section>
+        <h2>Overview</h2>
+        <div class="summary-grid" id="summary-cards"></div>
+      </section>
+
+      <section>
+        <div class="chart-header">
+          <h2>Throughput by Size (Avg MB/s)</h2>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="chart-box">
+          <svg id="bar-chart" viewBox="0 0 900 420" aria-label="Throughput by size"></svg>
+        </div>
+      </section>
+
+      <section>
+        <div class="chart-header">
+          <h2>Run-by-run Variability</h2>
+          <div class="tabs" id="size-tabs"></div>
+        </div>
+        <div class="chart-box">
+          <canvas id="run-chart" width="900" height="420"></canvas>
+        </div>
+      </section>
+
+      <section>
+        <h2>Raw Stats</h2>
+        <div class="table-wrap">
+          <table id="stats-table"></table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      Generated at <span id="generated-at">unknown</span> -
+      Charts render locally, no external JS libraries.
+    </footer>
+
+    <noscript>
+      <div class="notice">This page needs JavaScript to render charts.</div>
+    </noscript>
+
+    <script src="data/bench.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

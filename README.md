@@ -124,6 +124,17 @@ Note on Go `B/op` and `allocs/op`: Sum256 uses small temporary buffers and
 spawns goroutines for large inputs, so you may see small allocations there;
 streaming Hasher.Write remains allocation-free.
 
+## Interactive charts (GitHub Pages)
+The repo ships a static benchmark dashboard in `docs/`. It renders charts from
+`docs/data/bench.json` (also mirrored as `docs/data/bench.js` for no-fetch use).
+Enable GitHub Pages with the `docs/` folder to use it.
+
+To refresh the data locally:
+```powershell
+cd C:\Users\baian\GOLANG\Blake3-Golang
+tools\bench\collect_all.ps1
+```
+
 ## Design notes and tradeoffs vs the reference implementation
 - Go implementation uses AVX2 for chunk batching and parent reduction, with
   parallel chunk hashing for large inputs in Sum256; the streaming Hasher
