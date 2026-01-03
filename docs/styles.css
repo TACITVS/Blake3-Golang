@@ -169,6 +169,14 @@ section h2 {
   flex-wrap: wrap;
 }
 
+.legend-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-right: 6px;
+}
+
 .legend + .tabs {
   margin-left: auto;
 }
@@ -260,6 +268,7 @@ canvas {
   height: 10px;
   border-radius: 2px;
   display: inline-block;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
 }
 
 .footer {

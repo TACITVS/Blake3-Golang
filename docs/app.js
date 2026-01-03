@@ -104,6 +104,10 @@
     const legend = el(id);
     if (!legend) return;
     legend.innerHTML = '';
+    const title = document.createElement('span');
+    title.className = 'legend-title';
+    title.textContent = 'Color key';
+    legend.appendChild(title);
     versions.forEach((v) => {
       const item = document.createElement('div');
       item.className = 'legend-item';
@@ -238,10 +242,12 @@
         const stats = computeStats(v.sizes[s] || []);
         const row = document.createElement('tr');
         const color = palette[v.label] || '#999';
-        row.style.borderLeft = `4px solid ${color}`;
-        row.style.background = `linear-gradient(90deg, ${hexToRgba(color, 0.12)}, transparent 70%)`;
+        row.style.borderLeft = `6px solid ${color}`;
+        row.style.backgroundColor = hexToRgba(color, 0.18);
+        row.style.boxShadow = `inset 0 0 0 1px ${hexToRgba(color, 0.2)}`;
 
         const versionCell = document.createElement('td');
+        versionCell.style.color = color;
         const swatch = document.createElement('span');
         swatch.className = 'row-swatch';
         swatch.style.background = color;
