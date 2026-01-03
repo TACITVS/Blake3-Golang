@@ -76,37 +76,49 @@ go test -tags purego ./blake3 -run=^$ -bench=Benchmark -benchmem
 ```
 
 ## Benchmarks
-Environment:
-- OS: Windows (goos=windows)
+Machine (10-run averages; `tools/bench/compare_all.ps1`):
+- OS: Microsoft Windows 10 Pro
 - CPU: Intel(R) Core(TM) i7-4600M CPU @ 2.90GHz
-- Go: amd64 (goarch=amd64)
-- GCC: 15.1.0 (C:\msys64\mingw64\bin\gcc.exe)
+- Cores: 4
+- RAM: 15.69 GB
+- Go: go1.24.7 (windows/amd64)
+- GOOS/GOARCH: windows/amd64
+- GOMAXPROCS: default (Go runtime)
+- GCC: C:\msys64\mingw64\bin\gcc.exe
 - NASM: C:\Users\baian\AppData\Local\bin\NASM\nasm.exe
 
-Interleaved 10-run comparison (from `tools/bench/compare.ps1`, Go vs upstream
-reference C; each run alternates Go and ref C to reduce thermal bias):
+Method:
+- Go asm: `go test ./blake3 -run=^$ -bench=Benchmark -benchmem`
+- Go purego: `go test -tags purego ./blake3 -run=^$ -bench=Benchmark -benchmem`
+- Ref C: `tools/ref_bench/run.ps1` (official BLAKE3)
+- FP C: `tools/fp_bench/run.ps1` (FP_ASM_LIB-style NASM path)
 
-Go Sum256 (MB/s, avg/min/max/std):
-- 1K: 573.41 / 437.91 / 654.83 / 69.79
-- 8K: 2081.64 / 1300.10 / 2558.24 / 456.41
-- 1M: 3557.86 / 2174.63 / 4436.04 / 737.16
+Results (MB/s, avg/min/max/std, relative vs Ref C):
+| Version | Size | Avg MB/s | Min | Max | Std | Rel vs Ref |
+| --- | --- | --- | --- | --- | --- | --- |
+| Ref C | 1K | 712.03 | 588.71 | 806.68 | 61.72 | -% |
+| Ref C | 8K | 2496.84 | 2037.87 | 2793.2 | 253.99 | -% |
+| Ref C | 1M | 2596.34 | 2307.44 | 2993.69 | 196.15 | -% |
+| Go asm | 1K | 552.87 | 493.46 | 606.65 | 37.88 | -22.35% |
+| Go asm | 8K | 2080.36 | 1717.79 | 2290.6 | 184.71 | -16.68% |
+| Go asm | 1M | 3367.82 | 2333.41 | 3954.17 | 457.06 | 29.71% |
+| Go purego | 1K | 115.57 | 75.58 | 142.33 | 25.81 | -83.77% |
+| Go purego | 8K | 122.6 | 81.82 | 147.03 | 21.95 | -95.09% |
+| Go purego | 1M | 128.76 | 104.25 | 142.37 | 11.37 | -95.04% |
+| FP C | 1K | 165.74 | 129.34 | 204.97 | 23.3 | -76.72% |
+| FP C | 8K | 277.44 | 223.34 | 326.1 | 26.57 | -88.89% |
+| FP C | 1M | 1160.82 | 851.89 | 1339.34 | 147.14 | -55.29% |
 
-Ref C (MB/s, avg/min/max/std):
-- 1K: 777.52 / 637.56 / 832.43 / 59.79
-- 8K: 2702.10 / 1873.27 / 3011.68 / 395.55
-- 1M: 2702.58 / 1307.83 / 3211.86 / 557.93
-
-Relative Go vs Ref:
-- 1K: -26.25%
-- 8K: -22.96%
-- 1M: +31.65%
-- Mean across sizes: +0.50%
-- Weighted by bytes (1K/8K/1M): +31.21%
-
-C benchmark (FP_ASM_LIB-style NASM AVX2 8-way compressor, `tools/fp_bench/run.ps1`):
-- 1K: 197.17 MB/s
-- 8K: 282.82 MB/s
-- 1M: 1013.57 MB/s
+```mermaid
+xychart-beta
+  title "BLAKE3 Throughput (MB/s)"
+  x-axis ["1K", "8K", "1M"]
+  y-axis "MB/s" 0 --> 3400
+  bar "Ref C" [712.03, 2496.84, 2596.34]
+  bar "Go asm" [552.87, 2080.36, 3367.82]
+  bar "Go purego" [115.57, 122.6, 128.76]
+  bar "FP C" [165.74, 277.44, 1160.82]
+```
 
 Note on Go `B/op` and `allocs/op`: Sum256 uses small temporary buffers and
 spawns goroutines for large inputs, so you may see small allocations there;
@@ -143,10 +155,10 @@ cd C:\Users\baian\GOLANG\Blake3-Golang
 go test ./blake3 -run=^$ -bench=Benchmark -benchmem
 ```
 
-Interleaved 10-run Go vs reference:
+10-run all-versions comparison:
 ```powershell
 cd C:\Users\baian\GOLANG\Blake3-Golang
-tools\bench\compare.ps1
+tools\bench\compare_all.ps1
 ```
 
 FP_ASM_LIB C benchmark (NASM + GCC):
